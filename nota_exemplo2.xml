@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+  <NFe>
+    <infNFe Id="NFe31230500000000000000550010000001231000001230" versao="4.00">
+      <ide>
+        <nNF>123</nNF>
+        <dhEmi>2023-05-15T10:00:00-03:00</dhEmi>
+        <natOp>Venda de Mercadoria</natOp>
+        <tpNF>1</tpNF>
+      </ide>
+      <det nItem="1">
+        <prod>
+          <cProd>001</cProd>
+          <xProd>Produto Teste Geral (ICMS+IPI+PIS+COFINS)</xProd>
+          <uCom>UN</uCom>
+          <qCom>1.0000</qCom>
+          <vUnCom>1000.00</vUnCom>
+          <vProd>1000.00</vProd>
+        </prod>
+        <imposto>
+          <vTotTrib>150.00</vTotTrib>
+          <ICMS>
+            <ICMS00>
+              <orig>0</orig>
+              <CST>00</CST>
+              <modBC>3</modBC>
+              <vBC>1000.00</vBC>
+              <pICMS>18.00</pICMS>
+              <vICMS>180.00</vICMS>
+            </ICMS00>
+          </ICMS>
+          <IPI>
+            <cEnq>999</cEnq>
+            <IPITrib>
+              <CST>50</CST>
+              <vBC>1000.00</vBC>
+              <pIPI>5.00</pIPI>
+              <vIPI>50.00</vIPI>
+            </IPITrib>
+          </IPI>
+          <PIS>
+            <PISAliq>
+              <CST>01</CST>
+              <vBC>1000.00</vBC>
+              <pPIS>1.65</pPIS>
+              <vPIS>16.50</vPIS>
+            </PISAliq>
+          </PIS>
+          <COFINS>
+            <COFINSAliq>
+              <CST>01</CST>
+              <vBC>1000.00</vBC>
+              <pCOFINS>7.60</pCOFINS>
+              <vCOFINS>76.00</vCOFINS>
+            </COFINSAliq>
+          </COFINS>
+        </imposto>
+      </det>
+      <det nItem="2">
+        <prod>
+          <cProd>002</cProd>
+          <xProd>Produto ST e FCP</xProd>
+          <uCom>UN</uCom>
+          <qCom>1.0000</qCom>
+          <vUnCom>500.00</vUnCom>
+          <vProd>500.00</vProd>
+        </prod>
+        <imposto>
+          <ICMS>
+            <ICMS10>
+              <orig>0</orig>
+              <CST>10</CST>
+              <vBC>500.00</vBC>
+              <pICMS>18.00</pICMS>
+              <vICMS>90.00</vICMS>
+              <vBCST>700.00</vBCST>
+              <pICMSST>12.00</pICMSST>
+              <vICMSST>84.00</vICMSST>
+              <vBCFCP>500.00</vBCFCP>
+              <pFCP>2.00</pFCP>
+              <vFCP>10.00</vFCP>
+            </ICMS10>
+          </ICMS>
+        </imposto>
+      </det>
+      <total>
+        <ICMSTot>
+          <vBC>1500.00</vBC>
+          <vICMS>270.00</vICMS>
+          <vST>84.00</vST>
+          <vNF>1684.00</vNF>
+        </ICMSTot>
+      </total>
+    </infNFe>
+  </NFe>
+</nfeProc>
