@@ -188,7 +188,7 @@ def match_item(item, produtos, idx_ncm8, idx_ncm6):
     return {"nivel": "SEM_MATCH", "score": 0.0, "produto_fiscal": None}
 
 
-def buscar_regras(conn, produto_id, tributo, data_emissao, uf=UF_MVP):
+def buscar_regras(conn, produto_ncm, tributo, data_emissao, uf=UF_MVP):
     sql = """
         SELECT
             rt.id AS regra_id,
@@ -200,6 +200,8 @@ def buscar_regras(conn, produto_id, tributo, data_emissao, uf=UF_MVP):
             rt.vigencia_fim,
             rt.resumo_regra,
             rt.observacoes,
+            pf.ncm AS produto_ncm,
+            pf.descricao AS produto_descricao,
             t.nome AS tributo,
             j.tipo AS jurisdicao_tipo,
             j.uf,
@@ -211,10 +213,12 @@ def buscar_regras(conn, produto_id, tributo, data_emissao, uf=UF_MVP):
             fl.data_publicacao AS fonte_data_publicacao,
             fl.texto_relevante AS fonte_texto_relevante
         FROM regras_tributarias rt
+        JOIN produtos_fiscais pf ON pf.id = rt.produto_fiscal_id
         JOIN tributos t ON t.id = rt.tributo_id
         LEFT JOIN jurisdicoes j ON j.id = rt.jurisdicao_id
         LEFT JOIN fontes_legais fl ON fl.id = rt.fonte_legal_id
-        WHERE rt.produto_fiscal_id = %s
+        WHERE pf.ativo = 1
+          AND REPLACE(REPLACE(pf.ncm, '.', ''), '-', '') = %s
           AND UPPER(t.nome) = %s
           AND rt.ativo = 1
           AND rt.vigencia_inicio <= %s
@@ -234,7 +238,7 @@ def buscar_regras(conn, produto_id, tributo, data_emissao, uf=UF_MVP):
           rt.id DESC
     """
     cur = conn.cursor(dictionary=True)
-    cur.execute(sql, (produto_id, tributo.upper(), data_emissao, data_emissao, uf, uf))
+    cur.execute(sql, (normalize_ncm(produto_ncm), tributo.upper(), data_emissao, data_emissao, uf, uf))
     rows = cur.fetchall()
     cur.close()
     return [normalizar_regra(row) for row in rows]
@@ -252,6 +256,8 @@ def normalizar_regra(row):
         "vigencia_fim": row.get("vigencia_fim"),
         "resumo_regra": row.get("resumo_regra"),
         "observacoes": row.get("observacoes"),
+        "produto_ncm": normalize_ncm(row.get("produto_ncm")),
+        "produto_descricao": row.get("produto_descricao"),
         "jurisdicao_tipo": row.get("jurisdicao_tipo"),
         "uf": row.get("uf"),
         "municipio": row.get("municipio"),
@@ -268,6 +274,7 @@ def normalizar_regra(row):
 
 def texto_regra(regra):
     partes = [
+        regra.get("produto_descricao"),
         regra.get("resumo_regra"),
         regra.get("observacoes"),
         regra.get("fonte", {}).get("texto_relevante"),
@@ -528,7 +535,7 @@ def processar(xml_path):
             regras = []
             produto = match.get("produto_fiscal")
             if conn is not None and produto:
-                regras = buscar_regras(conn, produto["produto_id"], tributo, data_emissao, UF_MVP)
+                regras = buscar_regras(conn, produto["ncm"], tributo, data_emissao, UF_MVP)
             analises.append(comparar_tributo(tributo, item, match, regras))
 
         itens_saida.append({
