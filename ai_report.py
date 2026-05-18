@@ -3,6 +3,17 @@ import os
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date, datetime
+from decimal import Decimal
+
+
+class SafeJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (date, datetime)):
+            return obj.isoformat()
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
 
 
 def _compactar_resultado(resultado):
@@ -146,7 +157,7 @@ def gerar_resposta_amigavel(resultado, model=None):
                         "text": (
                             "Transforme o JSON abaixo em uma resposta em Markdown, "
                             "respeitando estritamente as instrucoes do sistema.\n\n"
-                            f"{json.dumps(payload, ensure_ascii=False)}"
+                            f"{json.dumps(payload, ensure_ascii=False, cls=SafeJSONEncoder)}"
                         ),
                     }
                 ],
@@ -158,7 +169,7 @@ def gerar_resposta_amigavel(resultado, model=None):
         },
     }
 
-    data = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
+    data = json.dumps(request_body, ensure_ascii=False, cls=SafeJSONEncoder).encode("utf-8")
     request = urllib.request.Request(
         _gemini_url(base_url, model, api_key),
         data=data,
