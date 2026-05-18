@@ -110,10 +110,19 @@ def conectar():
 
 def carregar_produtos(conn):
     sql = """
-        SELECT id AS produto_id, ncm, descricao, categoria
-        FROM produtos_fiscais
-        WHERE ativo = 1
-        ORDER BY ncm, id
+        SELECT
+            pf.id AS produto_id,
+            pf.ncm,
+            pf.descricao,
+            pf.categoria,
+            COUNT(rt.id) AS total_regras_ativas
+        FROM produtos_fiscais pf
+        LEFT JOIN regras_tributarias rt
+            ON rt.produto_fiscal_id = pf.id
+           AND rt.ativo = 1
+        WHERE pf.ativo = 1
+        GROUP BY pf.id, pf.ncm, pf.descricao, pf.categoria
+        ORDER BY pf.ncm, pf.id
     """
     cur = conn.cursor(dictionary=True)
     cur.execute(sql)
@@ -127,6 +136,7 @@ def carregar_produtos(conn):
             "ncm": normalize_ncm(row.get("ncm")),
             "descricao": row.get("descricao"),
             "categoria": row.get("categoria"),
+            "total_regras_ativas": int(row.get("total_regras_ativas") or 0),
         })
     return produtos
 
@@ -143,12 +153,14 @@ def construir_indices(produtos):
     return ncm8, ncm6
 
 
-def melhor_por_descricao(candidatos, descricao):
+def melhor_por_descricao(candidatos, descricao, preferir_com_regras=False):
     scored = []
     for produto in candidatos:
-        scored.append((fuzzy_score(descricao, produto.get("descricao")), produto))
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return scored[0] if scored else (0.0, None)
+        score = fuzzy_score(descricao, produto.get("descricao"))
+        regras_score = produto.get("total_regras_ativas", 0) if preferir_com_regras else 0
+        scored.append((regras_score, score, produto))
+    scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return (scored[0][1], scored[0][2]) if scored else (0.0, None)
 
 
 def match_item(item, produtos, idx_ncm8, idx_ncm6):
@@ -160,14 +172,14 @@ def match_item(item, produtos, idx_ncm8, idx_ncm6):
         if len(candidatos) == 1:
             return {"nivel": "NCM_EXATO", "score": 100.0, "produto_fiscal": candidatos[0]}
         if len(candidatos) > 1:
-            score, produto = melhor_por_descricao(candidatos, descricao)
-            return {"nivel": "NCM_EXATO", "score": score, "produto_fiscal": produto}
+            _, produto = melhor_por_descricao(candidatos, descricao, preferir_com_regras=True)
+            return {"nivel": "NCM_EXATO", "score": 100.0, "produto_fiscal": produto}
 
     if len(ncm) >= 6:
         candidatos = idx_ncm6.get(ncm[:6], [])
         if candidatos:
-            score, produto = melhor_por_descricao(candidatos, descricao)
-            return {"nivel": "NCM_PARCIAL", "score": score, "produto_fiscal": produto}
+            _, produto = melhor_por_descricao(candidatos, descricao, preferir_com_regras=True)
+            return {"nivel": "NCM_PARCIAL", "score": 70.0, "produto_fiscal": produto}
 
     score, produto = melhor_por_descricao(produtos, descricao)
     if produto and score >= SCORE_MINIMO_FUZZY:
