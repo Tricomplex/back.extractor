@@ -78,39 +78,52 @@ Recebera um JSON ja calculado por regras deterministicas. Nao altere status,
 valores, aliquotas, fontes, diferencas ou conclusoes. Nao invente regra,
 fundamento legal ou risco.
 
-Responda em portugues do Brasil, em Markdown de chat, com linguagem clara e
-profissional. Seja completo, mas direto.
+Responda exclusivamente com JSON valido, sem Markdown, sem bloco ``` e sem texto
+fora do JSON. O front usara esse JSON para montar a interface.
 
 Formato obrigatorio:
+{
+  "titulo": "string curta",
+  "resumo_executivo": "string curta e amigavel",
+  "pontos_atencao": [
+    {
+      "item": 1,
+      "tributo": "IPI",
+      "status": "divergente|sem_regra|revisao_manual",
+      "mensagem": "string objetiva",
+      "declarado": "string ou null",
+      "correto": "string ou null",
+      "diferenca": "string ou null",
+      "fonte": "string ou null"
+    }
+  ],
+  "itens": [
+    {
+      "numero_item": 1,
+      "titulo": "Produto - NCM",
+      "resumo": "string curta",
+      "tributos": [
+        {
+          "tributo": "ICMS",
+          "status": "ok|divergente|sem_regra|sem_imposto_na_nfe|revisao_manual",
+          "explicacao": "string amigavel",
+          "declarado": "string ou null",
+          "correto": "string ou null",
+          "diferenca": "string ou null",
+          "fonte": "string ou null"
+        }
+      ]
+    }
+  ],
+  "fontes": [
+    { "titulo": "string", "url": "string ou null" }
+  ],
+  "observacao": "string curta"
+}
 
-## Analise da NF-e
-Paragrafo curto com numero da nota, data, total e quantidade de itens.
-
-## Resumo
-Bullets com total de OK, divergencias, revisao manual e sem regra quando houver.
-
-## Pontos de atencao
-Liste somente divergencias, revisoes manuais e itens sem regra. Se nao houver,
-diga que nao foram encontrados alertas relevantes.
-Para cada divergencia, informe obrigatoriamente:
-- o que foi declarado na NF-e;
-- o que seria o correto segundo o JSON;
-- a diferenca;
-- a fonte legal/titulo/URL quando houver.
-
-## Itens analisados
-Para cada item, informe produto, NCM, match e uma lista de tributos com status,
-declarado, esperado, diferenca quando existir e mensagem objetiva.
-Em tributos divergentes, destaque "Declarado" e "Correto esperado" de forma
-comparavel. Nunca diga apenas que divergiu.
-
-## Fontes utilizadas
-Liste as fontes legais que aparecerem no JSON. Se uma analise estiver sem fonte,
-nao invente.
-
-## Observacao
-Inclua uma frase dizendo que a analise e automatizada e deve ser revisada por um
-contador antes de qualquer tomada de decisao fiscal.
+Inclua em pontos_atencao apenas divergencias, revisoes manuais e itens sem regra.
+Para divergencias, preencha declarado, correto, diferenca e fonte quando esses
+campos existirem no JSON de entrada.
 """.strip()
 
 
@@ -135,6 +148,18 @@ def _extrair_texto_gemini(response_json):
     return texto
 
 
+def _parse_json_response(texto):
+    cleaned = texto.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`").strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Gemini nao retornou JSON valido: {texto}") from exc
+
+
 def gerar_resposta_amigavel(resultado, model=None):
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -155,7 +180,7 @@ def gerar_resposta_amigavel(resultado, model=None):
                 "parts": [
                     {
                         "text": (
-                            "Transforme o JSON abaixo em uma resposta em Markdown, "
+                            "Transforme o JSON abaixo em um relatorio JSON amigavel, "
                             "respeitando estritamente as instrucoes do sistema.\n\n"
                             f"{json.dumps(payload, ensure_ascii=False, cls=SafeJSONEncoder)}"
                         ),
@@ -186,4 +211,4 @@ def gerar_resposta_amigavel(resultado, model=None):
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Nao foi possivel conectar ao Gemini: {exc}") from exc
 
-    return _extrair_texto_gemini(response_json)
+    return _parse_json_response(_extrair_texto_gemini(response_json))
