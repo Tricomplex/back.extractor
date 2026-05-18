@@ -1,138 +1,298 @@
-import xml.etree.ElementTree as ET
+import argparse
 import json
-import csv
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
-# Namespace padrão da NF-e
-NS = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
 
-def get_text(element, tag):
-    """Extrai o texto de uma tag lidando com namespace de forma robusta."""
+NS = {"nfe": "http://www.portalfiscal.inf.br/nfe"}
+NFE_NS = NS["nfe"]
+
+
+def strip_ns(tag):
+    return tag.split("}", 1)[1] if "}" in tag else tag
+
+
+def child(element, tag):
     if element is None:
         return None
-    # Busca explícita para evitar DeprecationWarning
-    el = element.find(f'{{{NS["nfe"]}}}{tag}')
-    if el is None:
-        el = element.find(tag)
-    
-    return el.text.strip() if el is not None and el.text is not None else None
+    found = element.find(f"{{{NFE_NS}}}{tag}")
+    if found is None:
+        found = element.find(tag)
+    return found
 
-def fmt_date(date_str):
-    """Formata data ISO para dd/mm/yyyy."""
-    if not date_str:
+
+def children(element, tag):
+    if element is None:
+        return []
+    found = element.findall(f"{{{NFE_NS}}}{tag}")
+    return found or element.findall(tag)
+
+
+def find_any(root, path):
+    found = root.find(path.replace("//", f"//{{{NFE_NS}}}"))
+    if found is None:
+        found = root.find(path)
+    return found
+
+
+def text(element, tag=None):
+    target = child(element, tag) if tag else element
+    if target is None or target.text is None:
         return None
-    date_part = date_str.split('T')[0]
-    try:
-        dt = datetime.strptime(date_part, '%Y-%m-%d')
-        return dt.strftime('%d/%m/%Y')
-    except (ValueError, IndexError):
-        return date_str
+    value = target.text.strip()
+    return value if value != "" else None
 
-def extrair_detalhes_imposto(det_element):
-    """Extrai dinamicamente qualquer imposto (ICMS, PIS, COFINS, IPI) do item."""
-    impostos = {}
-    imposto_tag = det_element.find(f'{{{NS["nfe"]}}}imposto')
-    if imposto_tag is None:
-        imposto_tag = det_element.find('.//imposto')
-    
-    if imposto_tag is not None:
-        for tributo in imposto_tag:
-            nome_tributo = tributo.tag.replace(f'{{{NS["nfe"]}}}', '')
-            for sub_grupo in tributo:
-                dados = {'tipo': sub_grupo.tag.replace(f'{{{NS["nfe"]}}}', '')}
-                for campo in sub_grupo:
-                    tag_campo = campo.tag.replace(f'{{{NS["nfe"]}}}', '')
-                    dados[tag_campo] = campo.text
-                impostos[nome_tributo] = dados
-    return impostos
+
+def decimal_or_none(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(Decimal(str(value).replace(",", ".")))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def date_iso(value):
+    if not value:
+        return None
+    raw = value.strip()
+    date_part = raw.split("T", 1)[0]
+    try:
+        return datetime.strptime(date_part, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return raw
+
+
+def element_to_dict(element):
+    if element is None:
+        return {}
+    data = {}
+    children_list = list(element)
+    if not children_list:
+        value = element.text.strip() if element.text else None
+        return value
+    for item in children_list:
+        key = strip_ns(item.tag)
+        value = element_to_dict(item)
+        if key in data:
+            if not isinstance(data[key], list):
+                data[key] = [data[key]]
+            data[key].append(value)
+        else:
+            data[key] = value
+    return data
+
+
+def extract_inf_nfe(root):
+    inf = root.find(f".//{{{NFE_NS}}}infNFe")
+    if inf is None:
+        inf = root.find(".//infNFe")
+    return inf
+
+
+def uf_from_party(inf_nfe, party_tag):
+    party = child(inf_nfe, party_tag)
+    if party is None:
+        return None
+    address = child(party, "enderEmit") if party_tag == "emit" else child(party, "enderDest")
+    return text(address, "UF")
+
+
+def extract_header(root):
+    inf_nfe = extract_inf_nfe(root)
+    ide = child(inf_nfe, "ide")
+    total = child(child(inf_nfe, "total"), "ICMSTot")
+    tp_nf = text(ide, "tpNF")
+    tipo_map = {"0": "entrada", "1": "saida"}
+    dh_emi = text(ide, "dhEmi") or text(ide, "dEmi")
+    inf_id = inf_nfe.attrib.get("Id") if inf_nfe is not None else None
+    chave = text(root.find(f".//{{{NFE_NS}}}protNFe/{{{NFE_NS}}}infProt"), "chNFe")
+
+    if not chave and inf_id and inf_id.startswith("NFe"):
+        chave = inf_id[3:]
+
+    return {
+        "numero": text(ide, "nNF"),
+        "chave_acesso": chave,
+        "data_emissao": date_iso(dh_emi),
+        "data_emissao_original": dh_emi,
+        "natureza_operacao": text(ide, "natOp"),
+        "tipo": tipo_map.get(tp_nf, tp_nf),
+        "uf_emitente": uf_from_party(inf_nfe, "emit"),
+        "uf_destinatario": uf_from_party(inf_nfe, "dest"),
+        "valor_total": decimal_or_none(text(total, "vNF")),
+    }
+
+
+def extract_tax_group(imposto, tributo):
+    group = child(imposto, tributo)
+    if group is None:
+        return None
+
+    raw = element_to_dict(group)
+    details = {}
+    variant = None
+
+    for sub in list(group):
+        sub_tag = strip_ns(sub.tag)
+        if list(sub):
+            variant = sub_tag
+            for field in list(sub):
+                details[strip_ns(field.tag)] = text(field)
+        else:
+            details[sub_tag] = text(sub)
+
+    cst = details.get("CST") or details.get("CSOSN")
+    result = {"grupo": variant, "raw": raw}
+
+    if tributo == "ICMS":
+        result.update({
+            "cst": cst,
+            "csosn": details.get("CSOSN"),
+            "modBC": details.get("modBC"),
+            "base_calculo": decimal_or_none(details.get("vBC")),
+            "aliquota_percentual": decimal_or_none(details.get("pICMS")),
+            "valor": decimal_or_none(details.get("vICMS")),
+            "campos": details,
+        })
+    elif tributo == "PIS":
+        result.update({
+            "cst": cst,
+            "base_calculo": decimal_or_none(details.get("vBC")),
+            "aliquota_percentual": decimal_or_none(details.get("pPIS")),
+            "valor": decimal_or_none(details.get("vPIS")),
+            "campos": details,
+        })
+    elif tributo == "COFINS":
+        result.update({
+            "cst": cst,
+            "base_calculo": decimal_or_none(details.get("vBC")),
+            "aliquota_percentual": decimal_or_none(details.get("pCOFINS")),
+            "valor": decimal_or_none(details.get("vCOFINS")),
+            "campos": details,
+        })
+    elif tributo == "IPI":
+        result.update({
+            "cst": cst,
+            "cEnq": details.get("cEnq"),
+            "base_calculo": decimal_or_none(details.get("vBC")),
+            "aliquota_percentual": decimal_or_none(details.get("pIPI")),
+            "valor": decimal_or_none(details.get("vIPI")),
+            "campos": details,
+        })
+
+    return result
+
+
+def extract_taxes(det):
+    imposto = child(det, "imposto")
+    if imposto is None:
+        return {}
+    taxes = {}
+    for tributo in ("ICMS", "PIS", "COFINS", "IPI"):
+        data = extract_tax_group(imposto, tributo)
+        if data is not None:
+            taxes[tributo] = data
+    for group in list(imposto):
+        name = strip_ns(group.tag)
+        if name not in taxes and name != "vTotTrib":
+            taxes[name] = {"raw": element_to_dict(group)}
+    return taxes
+
+
+def extract_items(root):
+    dets = root.findall(f".//{{{NFE_NS}}}det")
+    if not dets:
+        dets = root.findall(".//det")
+
+    items = []
+    for index, det in enumerate(dets, start=1):
+        prod = child(det, "prod")
+        if prod is None:
+            continue
+        item_number = det.attrib.get("nItem") or str(index)
+        items.append({
+            "numero_item": int(item_number) if item_number.isdigit() else index,
+            "cProd": text(prod, "cProd"),
+            "cEAN": text(prod, "cEAN"),
+            "cEANTrib": text(prod, "cEANTrib"),
+            "xProd": text(prod, "xProd"),
+            "NCM": text(prod, "NCM"),
+            "CEST": text(prod, "CEST"),
+            "CFOP": text(prod, "CFOP"),
+            "uCom": text(prod, "uCom"),
+            "qCom": decimal_or_none(text(prod, "qCom")),
+            "vUnCom": decimal_or_none(text(prod, "vUnCom")),
+            "vProd": decimal_or_none(text(prod, "vProd")),
+            "vDesc": decimal_or_none(text(prod, "vDesc")),
+            "vFrete": decimal_or_none(text(prod, "vFrete")),
+            "vSeg": decimal_or_none(text(prod, "vSeg")),
+            "vOutro": decimal_or_none(text(prod, "vOutro")),
+            "impostos": extract_taxes(det),
+            "produto_raw": element_to_dict(prod),
+        })
+    return items
+
 
 def extrair_nfe(xml_path):
     tree = ET.parse(xml_path)
     root = tree.getroot()
-
-    def find_in_root(tag):
-        """Busca elemento no root evitando DeprecationWarning."""
-        el = root.find(f'.//{{{NS["nfe"]}}}{tag}')
-        if el is None:
-            el = root.find(f'.//{tag}')
-        return el
-
-    # --- Cabeçalho ---
-    tp_nf_el = find_in_root('tpNF')
-    tp_nf = tp_nf_el.text.strip() if tp_nf_el is not None else None
-    tipo_map = {'0': 'Entrada', '1': 'Saída'}
-
-    dh_emi = find_in_root('dhEmi')
-    if dh_emi is None:
-        dh_emi = find_in_root('dEmi')
-    data_str = dh_emi.text.strip() if dh_emi is not None else None
-
-    # Uso de getattr com default para evitar erros caso a tag não exista
-    cabecalho = {
-        'numero': getattr(find_in_root('nNF'), 'text', 'N/A'),
-        'data_emissao': fmt_date(data_str),
-        'natureza_operacao': getattr(find_in_root('natOp'), 'text', 'N/A'),
-        'tipo': tipo_map.get(tp_nf, tp_nf),
-        'chave_acesso': getattr(find_in_root('chNFe'), 'text', 'N/A'),
-        'valor_total': getattr(find_in_root('vNF'), 'text', '0.00'),
+    return {
+        "cabecalho": extract_header(root),
+        "produtos": extract_items(root),
     }
 
-    # --- Produtos ---
-    produtos = []
-    # Busca a lista de itens
-    dets = root.findall(f'.//{{{NS["nfe"]}}}det')
-    if not dets:
-        dets = root.findall('.//det')
-
-    for i, det in enumerate(dets, start=1):
-        # Correção do Warning: verificação separada em vez de usar 'or'
-        prod = det.find(f'{{{NS["nfe"]}}}prod')
-        if prod is None:
-            prod = det.find('prod')
-        
-        if prod is not None:
-            item = {
-                'numero_item': i,
-                'codigo': get_text(prod, 'cProd'),
-                'descricao': get_text(prod, 'xProd'),
-                'unidade': get_text(prod, 'uCom'),
-                'quantidade': get_text(prod, 'qCom'),
-                'valor_unitario': get_text(prod, 'vUnCom'),
-                'valor_total': get_text(prod, 'vProd'),
-                'impostos': extrair_detalhes_imposto(det)
-            }
-            produtos.append(item)
-
-    return {'cabecalho': cabecalho, 'produtos': produtos}
 
 def imprimir_resumo(dados):
-    cab = dados['cabecalho']
-    print('\n' + '='*90)
-    print(f"NF-e: {cab['numero']} | Emissão: {cab['data_emissao']} | Total: R$ {cab['valor_total']}")
-    print('='*90)
-    
-    for p in dados['produtos']:
-        # Mostra o código do produto entre colchetes
-        codigo_display = p['codigo'] if p['codigo'] else "S/ COD"
-        print(f"Item {p['numero_item']}: [{codigo_display}] {p['descricao'][:40]:<40} | Qtd: {p['quantidade']:>6}")
-        
-        for imp, detalhes in p['impostos'].items():
-            # Tenta pegar CST ou CSOSN (Simples Nacional)
-            cst = detalhes.get('CST') or detalhes.get('CSOSN') or 'N/A'
-            # Busca o valor do imposto em diferentes tags possíveis
-            v_imp = detalhes.get('vICMS') or detalhes.get('vPIS') or detalhes.get('vCOFINS') or detalhes.get('vIPI') or '0.00'
-            print(f"   └─ {imp:<7} [CST: {cst:>3}] | Valor: R$ {v_imp:>10}")
-        print('-' * 90)
+    cab = dados["cabecalho"]
+    print("=" * 90)
+    print(
+        f"NF-e {cab.get('numero') or 'N/A'} | "
+        f"Emissao: {cab.get('data_emissao') or 'N/A'} | "
+        f"Total: R$ {cab.get('valor_total') or 0:.2f}"
+    )
+    print("=" * 90)
+    for item in dados["produtos"]:
+        print(
+            f"Item {item['numero_item']}: "
+            f"{item.get('NCM') or 'sem NCM'} | "
+            f"{item.get('xProd') or ''} | "
+            f"R$ {item.get('vProd') or 0:.2f}"
+        )
+        for tributo, imposto in item.get("impostos", {}).items():
+            cst = imposto.get("cst") or imposto.get("csosn") or "N/A"
+            valor = imposto.get("valor")
+            aliquota = imposto.get("aliquota_percentual")
+            print(f"  - {tributo}: CST/CSOSN {cst}, aliq {aliquota}, valor {valor}")
 
-if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print('Uso: python extrator_nfe.py <arquivo.xml>')
-        sys.exit(1)
 
-    xml_path = sys.argv[1]
-    try:
-        dados = extrair_nfe(xml_path)
+class JSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return super().default(obj)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Extrai cabecalho, itens e impostos de XML de NF-e.")
+    parser.add_argument("xml", help="Arquivo XML da NF-e")
+    parser.add_argument("--json", action="store_true", help="Imprime JSON completo")
+    args = parser.parse_args()
+
+    if not Path(args.xml).exists():
+        print(f"Arquivo nao encontrado: {args.xml}", file=sys.stderr)
+        return 1
+
+    dados = extrair_nfe(args.xml)
+    if args.json:
+        print(json.dumps(dados, ensure_ascii=False, indent=2, cls=JSONEncoder))
+    else:
         imprimir_resumo(dados)
-    except Exception as e:
-        print(f"Erro ao processar o arquivo: {e}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
