@@ -26,6 +26,7 @@ except ImportError:
     fuzz = None
 
 from extractor import extrair_nfe
+from ai_report import gerar_resposta_amigavel
 
 
 TRIBUTOS_MVP = ("ICMS", "PIS", "COFINS", "IPI")
@@ -374,6 +375,28 @@ def montar_fonte(regra):
     }
 
 
+def resumo_valor_esperado(esperado):
+    partes = []
+    tipo = esperado.get("tipo_regra")
+    aliquota = esperado.get("aliquota_percentual")
+    valor = esperado.get("valor")
+    if tipo:
+        partes.append(f"tipo {tipo}")
+    if aliquota is not None:
+        partes.append(f"aliquota {aliquota:.2f}%")
+    if valor is not None:
+        partes.append(f"valor R$ {valor:.2f}")
+    return ", ".join(partes) if partes else "regra esperada nao quantificada"
+
+
+def resumo_fonte(fonte):
+    titulo = fonte.get("titulo")
+    url = fonte.get("url")
+    if titulo and url:
+        return f"{titulo} ({url})"
+    return titulo or url or "fonte legal vinculada no banco"
+
+
 def comparar_tributo(tributo, item, match, regras):
     declarado = imposto_declarado(item, tributo)
     produto = match.get("produto_fiscal")
@@ -426,7 +449,11 @@ def comparar_tributo(tributo, item, match, regras):
         aliq_decl = declarado.get("aliquota_percentual")
         aliq_ok = aliq_decl in (None, 0) or abs(aliq_decl) <= TOLERANCIA_ALIQUOTA
         status = "ok" if valor_ok and aliq_ok else "divergente"
-        msg = "Imposto tratado como nao tributado." if status == "ok" else "Regra indica nao tributado, mas ha imposto positivo na NF-e."
+        msg = (
+            "Imposto tratado como nao tributado."
+            if status == "ok"
+            else f"O correto e nao tributar conforme {resumo_fonte(fonte)}, mas a NF-e declarou imposto positivo."
+        )
         return analise_base(tributo, status, declarado, esperado, fonte=fonte, mensagem=msg)
 
     if tipo_regra != "ALIQUOTA":
@@ -457,7 +484,10 @@ def comparar_tributo(tributo, item, match, regras):
     mensagem = (
         f"{tributo} confere com a regra vigente."
         if status == "ok"
-        else f"{tributo} diverge da regra vigente encontrada."
+        else (
+            f"{tributo} diverge: o correto seria {resumo_valor_esperado(esperado)} "
+            f"conforme {resumo_fonte(fonte)}."
+        )
     )
     return analise_base(
         tributo,
@@ -601,6 +631,13 @@ def salvar_csv(resultado, caminho):
         writer.writerows(rows)
 
 
+def salvar_texto(texto, caminho):
+    with open(caminho, "w", encoding="utf-8") as file:
+        file.write(texto)
+        if not texto.endswith("\n"):
+            file.write("\n")
+
+
 def imprimir_terminal(resultado):
     cab = resultado["cabecalho"]
     print("=" * 100)
@@ -634,6 +671,9 @@ def main():
     parser = argparse.ArgumentParser(description="Analisa XML de NF-e contra regras tributarias do MySQL.")
     parser.add_argument("xml", help="Arquivo XML da NF-e")
     parser.add_argument("--out", help="Arquivo .json ou .csv de saida")
+    parser.add_argument("--ai", action="store_true", help="Gera resposta amigavel em Markdown usando OpenAI")
+    parser.add_argument("--ai-out", help="Arquivo .md/.txt para salvar a resposta amigavel")
+    parser.add_argument("--ai-model", help="Modelo Gemini para a resposta amigavel")
     args = parser.parse_args()
 
     if not Path(args.xml).exists():
@@ -641,7 +681,22 @@ def main():
         return 1
 
     resultado = processar(args.xml)
+
+    if args.ai:
+        try:
+            resposta = gerar_resposta_amigavel(resultado, model=args.ai_model)
+            resultado["resposta_amigavel"] = resposta
+        except Exception as exc:
+            resultado["resposta_amigavel_erro"] = str(exc)
+            log.error("Nao foi possivel gerar resposta amigavel: %s", exc)
+
     imprimir_terminal(resultado)
+
+    if args.ai and resultado.get("resposta_amigavel"):
+        print("\n" + resultado["resposta_amigavel"] + "\n")
+        if args.ai_out:
+            salvar_texto(resultado["resposta_amigavel"], args.ai_out)
+            log.info("Resposta amigavel salva em %s", args.ai_out)
 
     if args.out:
         if Path(args.out).suffix.lower() == ".csv":

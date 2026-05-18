@@ -24,15 +24,20 @@ DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=
 DB_NAME=tricomplex
+
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash-lite
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 ```
 
 Dependencias esperadas para consulta ao banco:
 
 ```bash
-pip install mysql-connector-python python-dotenv rapidfuzz
+pip install -r requirements.txt
 ```
 
 Sem `rapidfuzz`, o matcher usa fallback simples com `difflib`. Sem MySQL acessivel, a extracao XML continua funcionando e o resultado informa que as regras nao foram consultadas.
+Sem `GEMINI_API_KEY`, a analise deterministica continua funcionando; apenas a resposta amigavel com IA fica indisponivel.
 
 ## Uso
 
@@ -59,6 +64,30 @@ Salvar CSV resumido por item e tributo:
 
 ```bash
 python matcher.py nota_exemplo.xml --out resultado.csv
+```
+
+Gerar tambem uma resposta amigavel em Markdown usando IA:
+
+```bash
+python matcher.py nota_exemplo.xml --ai
+```
+
+Usar outro modelo Gemini sem alterar o `.env`:
+
+```bash
+python matcher.py nota_exemplo.xml --ai --ai-model gemini-2.5-flash-lite
+```
+
+Salvar JSON completo com a resposta amigavel embutida:
+
+```bash
+python matcher.py nota_exemplo.xml --ai --out resultado.json
+```
+
+Salvar a resposta amigavel em um arquivo separado:
+
+```bash
+python matcher.py nota_exemplo.xml --ai --ai-out resposta.md
 ```
 
 ## Saida JSON
@@ -112,7 +141,8 @@ Formato resumido:
         }
       ]
     }
-  ]
+  ],
+  "resposta_amigavel": "## Analise da NF-e\n..."
 }
 ```
 
@@ -131,3 +161,4 @@ Status possiveis por tributo:
 - Regras de tipo diferente de `ALIQUOTA` e `NAO_TRIBUTADO` sao encaminhadas para revisao manual.
 - Quando ha multiplas regras de IPI para o mesmo produto, o motor tenta desempatar por descricao; se continuar ambiguo, retorna `revisao_manual`.
 - A qualidade da analise depende das regras vigentes ja carregadas pelo scraper no MySQL.
+- A IA Gemini e usada somente para formatar a resposta em Markdown. Ela recebe o JSON ja calculado e nao deve alterar regra, status, aliquota, valor, fonte ou conclusao.
