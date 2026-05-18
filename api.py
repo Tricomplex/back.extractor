@@ -4,8 +4,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse
 
 from ai_report import gerar_resposta_amigavel
 from matcher import processar
@@ -15,7 +16,7 @@ load_dotenv()
 
 app = FastAPI(
     title="Tricomplex Extractor API",
-    description="Analise de XML de NF-e contra regras tributarias e resposta em Markdown.",
+    description="Analise de XML de NF-e contra regras tributarias e relatorio amigavel em JSON.",
     version="0.1.0",
 )
 
@@ -72,13 +73,16 @@ def health():
     }
 
 
-@app.post("/analisar-nfe", response_class=PlainTextResponse)
+@app.post("/analisar-nfe")
 async def analisar_nfe(file: UploadFile = File(...)):
     temp_path = await _salvar_upload_temporario(file)
     try:
         resultado = processar(temp_path)
-        markdown = gerar_resposta_amigavel(resultado)
-        return PlainTextResponse(markdown, media_type="text/markdown; charset=utf-8")
+        relatorio = gerar_resposta_amigavel(resultado)
+        return JSONResponse(jsonable_encoder({
+            "dados": resultado,
+            "relatorio": relatorio,
+        }))
     except HTTPException:
         raise
     except Exception as exc:
@@ -92,7 +96,7 @@ async def analisar_nfe_json(file: UploadFile = File(...)):
     temp_path = await _salvar_upload_temporario(file)
     try:
         resultado = processar(temp_path)
-        return JSONResponse(resultado)
+        return JSONResponse(jsonable_encoder(resultado))
     except HTTPException:
         raise
     except Exception as exc:
