@@ -28,6 +28,7 @@ DB_NAME=tricomplex
 GEMINI_API_KEY=
 GEMINI_MODEL=gemini-2.5-flash-lite
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+CORS_ORIGINS=*
 ```
 
 Dependencias esperadas para consulta ao banco:
@@ -88,6 +89,40 @@ Salvar a resposta amigavel em um arquivo separado:
 
 ```bash
 python matcher.py nota_exemplo.xml --ai --ai-out resposta.md
+```
+
+## API FastAPI
+
+Subir a API local:
+
+```bash
+uvicorn api:app --reload --host 0.0.0.0 --port 8000
+```
+
+Verificar saude:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Enviar um XML e receber Markdown gerado pela IA:
+
+```bash
+curl -X POST http://localhost:8000/analisar-nfe \
+  -F "file=@nota_exemplo.xml"
+```
+
+No PowerShell:
+
+```powershell
+Invoke-RestMethod -Uri http://localhost:8000/analisar-nfe -Method Post -Form @{ file = Get-Item .\nota_exemplo.xml }
+```
+
+Endpoint de debug sem IA, retornando o JSON deterministico:
+
+```bash
+curl -X POST http://localhost:8000/analisar-nfe-json \
+  -F "file=@nota_exemplo.xml"
 ```
 
 ## Saida JSON
